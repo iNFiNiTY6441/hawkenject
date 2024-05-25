@@ -1308,7 +1308,7 @@ public:
 	struct FURL                                        LastRemoteURL;                                            // 0x06C8(0x0044) (NeedCtorLink)
 	TArray<struct FString>                             ServerActors;                                             // 0x070C(0x000C) (Config, NeedCtorLink)
 	struct FString                                     TravelURL;                                                // 0x0718(0x000C) (NeedCtorLink)
-	unsigned char                                      TravelType;                                               // 0x0724(0x0001)
+	TEnumAsByte<ETravelType>                           TravelType;                                               // 0x0724(0x0001)
 	unsigned char                                      UnknownData00[0x3];                                       // 0x0725(0x0003) MISSED OFFSET
 	unsigned long                                      bWorldWasLoadedThisTick : 1;                              // 0x0728(0x0004) (Const, Transient)
 	unsigned long                                      bCheckForMovieCapture : 1;                                // 0x0728(0x0004) (Const, Transient)
@@ -2483,7 +2483,7 @@ public:
 	}
 
 
-	float GetTeamScore(int TeamIdx);
+	float GetTeamScore(int TeamIdx); 
 	void ClearOnlineDelegates();
 	void InitCrowdPopulationManager();
 	void OnEngineHasLoaded();

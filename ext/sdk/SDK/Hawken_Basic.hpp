@@ -134,6 +134,12 @@ public:
 		return (TEnum)value;
 	}
 
+	//Assign operator overload
+	// inline bool operator=(TEnum _value) const
+	// {
+	// 	value = value(static_cast<uint8_t>(_value));
+	// };
+
 private:
 	uint8_t value;
 };

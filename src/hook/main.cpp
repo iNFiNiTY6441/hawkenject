@@ -44,6 +44,8 @@
 
 #include "detours.h"
 #include "SDK.hpp"
+#include "string"
+#include "stdio.h"
 
 /**
  * DEBUG_MODE
@@ -61,17 +63,52 @@
  */
 extern "C"
 {
-    // Functions
-    auto Real_ParseParam                     = static_cast<uint32_t(__cdecl*)(const wchar_t*, const wchar_t*, uint32_t)>(nullptr);
-    auto Real_TArray_USeqAct_Latent_AddItem  = static_cast<uint32_t(__thiscall*)(int32_t, int32_t)>(nullptr);
-    auto Real_UGameEngine_ConstructNetDriver = static_cast<int32_t(__thiscall*)(int32_t)>(nullptr);
-    auto Real_UGameEngine_SpawnServerActors  = static_cast<void(__thiscall*)(int32_t)>(nullptr);
-    auto Real_UNetDriver_InitListen          = static_cast<int32_t(__thiscall*)(int32_t, int32_t, int32_t, int32_t)>(nullptr);
-    auto Real_UTcpNetDriver_InitListen       = static_cast<int32_t(__thiscall*)(int32_t, atomic::objects::FNetworkNotify*, int32_t, int32_t)>(nullptr);
-    auto Real_UPackageMap_AddNetPackages     = static_cast<void(__thiscall*)(int32_t)>(nullptr);
-    auto Real_UWorld_GetGameInfo             = static_cast<int32_t(__thiscall*)(int32_t)>(nullptr);
-    auto Real_UWorld_SetGameInfo             = static_cast<void(__thiscall*)(int32_t, int32_t)>(nullptr);
-    auto Real_UWorld_GetWorldInfo            = static_cast<int32_t(__thiscall*)(int32_t, int32_t)>(nullptr);
+    // Functions mainly relevant for server / UWorld::Listen reimplementation
+    auto Real_ParseParam                        = static_cast<uint32_t(__cdecl*)(const wchar_t*, const wchar_t*, uint32_t)>(nullptr);
+    auto Real_TArray_USeqAct_Latent_AddItem     = static_cast<uint32_t(__thiscall*)(int32_t, int32_t)>(nullptr);
+    auto Real_UGameEngine_ConstructNetDriver    = static_cast<int32_t(__thiscall*)(int32_t)>(nullptr);
+    auto Real_UGameEngine_SpawnServerActors     = static_cast<void(__thiscall*)(int32_t)>(nullptr);
+    auto Real_UNetDriver_InitListen             = static_cast<int32_t(__thiscall*)(int32_t, int32_t, int32_t, int32_t)>(nullptr);
+    auto Real_UTcpNetDriver_InitListen          = static_cast<int32_t(__thiscall*)(int32_t, atomic::objects::FNetworkNotify*, int32_t, int32_t)>(nullptr);
+    auto Real_UPackageMap_AddNetPackages        = static_cast<void(__thiscall*)(int32_t)>(nullptr);
+    auto Real_UWorld_GetGameInfo                = static_cast<int32_t(__thiscall*)(int32_t)>(nullptr);
+    auto Real_UWorld_SetGameInfo                = static_cast<void(__thiscall*)(int32_t, int32_t)>(nullptr);
+    auto Real_UWorld_GetWorldInfo               = static_cast<int32_t(__thiscall*)(int32_t, int32_t)>(nullptr);
+
+    auto Real_ProcessEvent                      = static_cast<void(__thiscall*)(int32_t, int32_t)>(nullptr);
+
+    ////////////////////////////////////////////////////////////
+    // Infinity: Recent hooked stuff for testing & fixes      //
+    ////////////////////////////////////////////////////////////
+
+    // GameEngine Browse: Prevent server travel to network URLs: Remove local host IP from beginning of TravelURL
+    auto Real_UGameEngine_Browse   = static_cast<BOOL(__thiscall*)( int32_t, Classes::FURL, int32_t )>(nullptr);
+
+    // FUrl Constructor
+    auto Real_FURL_Base_URL_Traveltype_Constructor  = static_cast<void(__thiscall*)(int32_t, const wchar_t *, Classes::ETravelType )>(nullptr);
+
+    // MeteorOSS Functions
+    auto Real_UOnlineSubsystemMeteor_IsServerListingCreated         = static_cast<BOOL(__thiscall*)(int32_t)>(nullptr);
+    auto Real_UOnlineSubsystemMeteor_ReadGameItemInstanceCollection = static_cast<void(__thiscall*)(int32_t,int32_t,int32_t)>(nullptr);
+
+    // Player Validation Status Functions
+    auto Real_AR_PlayerController_UpdateOverallStatus               = static_cast<void(__thiscall*)(int32_t)>(nullptr);
+    auto Real_AR_PlayerController_UpdateMechInstanceExpiredStatus   = static_cast<void(__thiscall*)(int32_t)>(nullptr);
+
+    // Mechsetup Functions
+    auto Real_UR_MechSetup_CreateMechPresetsFromInstances           = static_cast<void(__thiscall*)(int32_t, int32_t)>(nullptr);
+    auto Real_UR_MechSetup_SetupMechPresetFromInstance              = static_cast<BOOL(__thiscall*)(int32_t, int32_t, int32_t)>(nullptr);
+    auto Real_UR_MechSetup_IsPresetIndexValid                       = static_cast<BOOL(__thiscall*)(int32_t, int32_t)>(nullptr);
+    auto Real_UR_MechSetup_CheckMechPresetIntegrity                 = static_cast<BOOL(__thiscall*)(int32_t, int32_t, int32_t )>(nullptr);
+
+    // PlayerReplicationInfo sync status
+    auto Real_PRI_IsOnlinePlayerAccountSynced                       = static_cast<BOOL(__thiscall*)()>(nullptr);
+
+    // ReadOnlinePlayerAccounts at client on deathmatch join
+    auto Real_AR_Deathmatch_ReadOnlinePlayerAccounts                = static_cast<void(__thiscall*)()>(nullptr); 
+
+    ////////////////////////////////////////////////////////////
+
 
     // Object Pointers
     auto Real_PTR_GCmdLine                   = static_cast<uint32_t*>(nullptr);
@@ -144,6 +181,303 @@ do_call:
         popfd;
         popad;
     }
+}
+
+
+/**
+ * UNUSED: Originally intended to correct server trying to attempt to travel to network urls ( 0.0.0.0/MapName?args ) by correcting things in the constructed FUrl
+ * Ended up hooking UGameEngine::Browse() instead for more predictable & limited behavior.
+ * 
+ * Left here in case it is needed - cleanup will come later
+*/
+VOID __fastcall Mine_FURL_Base_URL_Traveltype_Constructor( void* pThis, void* edx, int32_t base, const wchar_t* texturl, Classes::ETravelType traveltype ) 
+{   
+    UNREFERENCED_PARAMETER(pThis);
+    UNREFERENCED_PARAMETER(edx);
+    ::OutputDebugStringA("\r\n ========================== URL CONSTRUCTED ==========================");
+    Real_FURL_Base_URL_Traveltype_Constructor( base, texturl, traveltype );
+}
+
+/**
+ * INVESTIGATE: Seems to be the initial kickoff to populate the PlayerReplicationInfo.MechPreset from player account instances
+ * 
+ * Left here in case it is needed - cleanup will come later
+*/
+
+VOID __fastcall Mine_UR_MechSetup_CreateMechPresetsFromInstances( int32_t MechSetup, int32_t pEdx, int32_t GameItemInstanceCollection )
+{
+    UNREFERENCED_PARAMETER( MechSetup );
+    UNREFERENCED_PARAMETER( pEdx );
+    UNREFERENCED_PARAMETER( GameItemInstanceCollection );
+
+    //Classes::UOnlineGameItemInstanceCollection* cGameItemInstanceCollection = reinterpret_cast<Classes::UOnlineGameItemInstanceCollection*>(GameItemInstanceCollection);
+
+    int num_items = 9999;//cGameItemInstanceCollection->NumItems();
+
+    char message[255];
+    sprintf_s( message, "Mine_UR_MechSetup_CreateMechPresetsFromInstances: NumItems: %d", num_items);
+
+    Real_UR_MechSetup_CreateMechPresetsFromInstances( MechSetup, GameItemInstanceCollection );
+}
+
+/**
+ * INVESTIGATE: Method name is self-explanatory. However it seems to only ever create from server-owned instances. Even on-join of a client that uses a different account / inventory.
+ * Maybe just before this this whole process is being called on a specific netid? Could it be stuck at the first netid because what we have is a client?
+*/
+BOOL __fastcall Mine_UR_MechSetup_SetupMechPresetFromInstance( int32_t MechSetup, int32_t pEdx, int32_t presetIdx, int32_t ItemInstance )
+{
+    UNREFERENCED_PARAMETER( MechSetup );
+    UNREFERENCED_PARAMETER( pEdx );
+    UNREFERENCED_PARAMETER( ItemInstance );
+
+    Classes::UOnlineGameItemInstance* cItemInstance = reinterpret_cast<Classes::UOnlineGameItemInstance*>(ItemInstance);
+
+
+    //Classes::UR_MechSetup* cMechSetup = reinterpret_cast<Classes::UR_MechSetup*>(MechSetup);
+
+    //auto test = cMechSetup->G
+
+    char message[255];
+    sprintf_s( message, "Mine_UR_MechSetup_SetupMechPresetFromInstance: PRESET %d", presetIdx);
+    ::OutputDebugStringA( message );
+    ::OutputDebugStringW( cItemInstance->InstanceID.c_str() );
+    ::OutputDebugStringW( cItemInstance->ItemName.c_str() );
+    ::OutputDebugStringA("..............................");
+
+    //BOOL result = 
+
+    return Real_UR_MechSetup_SetupMechPresetFromInstance( MechSetup, presetIdx, ItemInstance );;
+}
+
+/**
+ * INVESTIGATE: Called near every tick when selecting / deploying. Preset for foreign clients always seems to be 0 - something fishy is going on here.
+*/
+BOOL __fastcall Mine_UR_MechSetup_CheckMechPresetIntegrity( int32_t MechSetup, int32_t pEdx, int32_t presetIdx, int32_t ItemInstance )
+{
+    UNREFERENCED_PARAMETER( MechSetup );
+    UNREFERENCED_PARAMETER( pEdx );
+    UNREFERENCED_PARAMETER( ItemInstance );
+
+
+    Classes::UOnlineGameItemInstance* cItemInstance = reinterpret_cast<Classes::UOnlineGameItemInstance*>(ItemInstance);
+
+    auto test = cItemInstance->InstanceID.c_str();
+    auto test2 = cItemInstance->ItemName.c_str();
+    
+    char message[255];
+    sprintf_s( message, "Mine_UR_MechSetup_CheckMechPresetIntegrity: PRESET %d", presetIdx);
+    ::OutputDebugStringA(message);
+    ::OutputDebugStringW( test );
+    ::OutputDebugStringW( test2 );
+    ::OutputDebugStringA("..............................");
+    return Real_UR_MechSetup_CheckMechPresetIntegrity( MechSetup, presetIdx, ItemInstance );
+}
+
+/**
+ * INVESTIGATE: Called near every tick when selecting / deploying. Preset for foreign clients always seems to be 0 - something fishy is going on here.
+*/
+BOOL __fastcall Mine_UR_MechSetup_IsPresetIndexValid( int32_t MechSetup, int32_t pEdx, int32_t presetIdx )
+{
+    UNREFERENCED_PARAMETER( MechSetup );
+    UNREFERENCED_PARAMETER( pEdx );
+    UNREFERENCED_PARAMETER( presetIdx );
+
+
+    Classes::UR_MechSetup* cMechSetup = reinterpret_cast<Classes::UR_MechSetup*>(MechSetup);
+
+    BOOL result = Real_UR_MechSetup_IsPresetIndexValid( MechSetup, presetIdx );
+    //char message[63];
+    //sprintf_s(message, "Mine_UR_MechSetup_IsPresetIndexValid: Preset (%d) spoofed to TRUE", presetIdx);
+    char message[255];
+    sprintf_s( message, "Mine_UR_MechSetup_IsPresetIndexValid: Status is %s for preset %d \r\n -CurrentPresetIndex: %d", 
+        result ? "TRUE" : "FALSE", 
+        presetIdx,
+        cMechSetup->CurrentPresetIndex
+    );
+
+    //::OutputDebugStringA(message);
+    //::OutputDebugStringA("Mine_UR_MechSetup_IsPresetIndexValid: Spoofed to TRUE");
+    return result;
+}
+
+/**
+ * FIX:
+ * Spoof status of whether the OSS has created the dedicated server listing.
+ * The actual creation seems to not happen - so in normal execution this always returns false.
+ * During the PendingMatch state, the game server waits until this is true before allowing players to ready up.
+ * So this prevents ready-up if not spoofed to true
+ * 
+*/
+BOOL Mine_UOnlineSubsystemMeteor_IsServerListingCreated( int32_t OSSMeteor )
+{
+    UNREFERENCED_PARAMETER(OSSMeteor);
+
+    ::OutputDebugStringA("\r\n ========================== Mine_UOnlineSubsystemMeteor_IsServerListingCreated ==========================\r\n Spoofing to TRUE");
+    return TRUE;
+}
+
+
+
+VOID __fastcall Mine_UOnlineSubsystemMeteor_ReadGameItemInstanceCollection( int32_t pMeteorOSS, int32_t pEdx, int32_t pNetID, int32_t pInstanceCollection )
+{
+    UNREFERENCED_PARAMETER( pMeteorOSS );
+    UNREFERENCED_PARAMETER( pEdx );
+    UNREFERENCED_PARAMETER( pNetID );
+    UNREFERENCED_PARAMETER( pInstanceCollection );
+
+
+    Classes::FUniqueNetId* cNetID = reinterpret_cast<Classes::FUniqueNetId*>(pNetID);
+
+    char char_netid[255];
+    sprintf_s( char_netid, "%d %d %d %d", cNetID->Uid.A, cNetID->Uid.B, cNetID->Uid.C, cNetID->Uid.D );
+
+    ::OutputDebugStringA("-=-=-=-=-=--=-=-=-=-=--=-=-=-=-=--=-=-=-=-=--=-=");
+    ::OutputDebugStringA("-=-=-=-=-=- READ INSTANCE COLLECTION -=-=-=-=-=-");
+    ::OutputDebugStringA( char_netid );
+    Real_UOnlineSubsystemMeteor_ReadGameItemInstanceCollection( pMeteorOSS, pNetID, pInstanceCollection );
+}
+
+/**
+ * INVESTIGATE: Called near every tick when selecting / deploying. Preset for foreign clients always seems to be 0 - something fishy is going on here.
+*/
+BOOL __fastcall Mine_UGameEngine_Browse( int32_t game_engine, int32_t pEdx, Classes::FURL url, int32_t err ) 
+{   
+    //UNREFERENCED_PARAMETER(ptr_gameengine);
+    UNREFERENCED_PARAMETER(pEdx);
+    //UNREFERENCED_PARAMETER(err);
+    // auto CGameEngine             = reinterpret_cast<Classes::UGameEngine*>(gameengine);
+    // auto CUrl                    = reinterpret_cast<Classes::FURL*>(url);
+    //auto CErrorString            = reinterpret_cast<Classes::FString*>(ref_errorstring);
+
+    ::OutputDebugStringA("[HOOK] UGameEngine_Browse CALLED");
+
+
+    char message[63];
+    sprintf_s(message, "ptr_param_game_engine: %d", game_engine);
+
+    char message2[63];
+    sprintf_s(message2, "ptr_Real_UGameEngine: %d", *Real_PTR_UGameEngine);
+
+    char message3[63];
+    sprintf_s(message3, "ptr_err: %d", err);
+
+    ::OutputDebugStringA( message );
+    ::OutputDebugStringA( message2 );
+    ::OutputDebugStringA( message3 );
+
+    ::OutputDebugStringA("\r\n\r\n");
+    ::OutputDebugStringA("[HOOK] [BROWSE] PROTOCOL:");
+    ::OutputDebugStringW( url.Protocol.c_str() );
+
+    ::OutputDebugStringA("\r\n\r\n");
+    ::OutputDebugStringA("[HOOK] [BROWSE] HOST:");
+    ::OutputDebugStringW( url.Host.c_str() );
+
+    ::OutputDebugStringA("\r\n\r\n");
+    ::OutputDebugStringA("[HOOK] [BROWSE] MAP:");
+    ::OutputDebugStringW( url.Map.c_str() );
+
+
+    url.Host = Classes::FString(L"");
+
+    //Classes::FString* ptr = &myerrortext;
+
+    return Real_UGameEngine_Browse( game_engine, url, err );
+}
+
+/**
+ * WORKAROUND: Override status here to have the client limp through to spawn, results in broken behavior. The client will have the servers preset 0 mech forcefully replicated.
+ * This does not affect weapons, so you can get an Assault ( server enforced mech preset ) with Rocketeer weapons ( Local client mech selection weapons )
+*/
+VOID __fastcall Mine_AR_PlayerController_UpdateMechInstanceExpiredStatus( int32_t PC )
+{
+
+    bool override_status = true;
+
+    char dbg_printout[127];
+    sprintf_s( dbg_printout, "[Mine_AR_PlayerController_UpdateMechInstanceExpiredStatus]: INTERCEPT (%s)", override_status ? "No override" : "OVERRIDE to SVS_Succeeded");
+
+    if ( override_status ) {
+
+        Classes::AR_PlayerController* cPlayerController = reinterpret_cast<Classes::AR_PlayerController*>(PC);
+
+        //cPlayerController->ValidationStatus_ItemInstanceCollection    = Classes::ESelectionValidationStatus::SVS_Succeeded;
+        //cPlayerController->ValidationStatus_PresetLoaded              = Classes::ESelectionValidationStatus::SVS_Succeeded;
+        cPlayerController->ValidationStatus_MechInstance              = Classes::ESelectionValidationStatus::SVS_Succeeded;
+        //cPlayerController->ValidationStatus_SelectedPrimaryWeapon     = Classes::ESelectionValidationStatus::SVS_Succeeded;
+        //cPlayerController->ValidationStatus_AchievementsLoaded        = Classes::ESelectionValidationStatus::SVS_Succeeded;
+        //cPlayerController->OverallSelectionValidationStatus           = Classes::ESelectionValidationStatus::SVS_Succeeded;
+        cPlayerController->SelectionValidationResponse                = Classes::ESelectionValidationResponse::SVR_Valid;
+    }
+
+    ::OutputDebugStringA( dbg_printout );
+    Real_AR_PlayerController_UpdateMechInstanceExpiredStatus( PC );
+}
+
+VOID __fastcall Mine_AR_PlayerController_UpdateOverallStatus( int32_t PC ) 
+{
+
+
+    // if ( cplayer ) {
+
+    //     cplayer->ValidationStatus_ItemInstanceCollection    = Classes::ESelectionValidationStatus::SVS_Succeeded;
+    //     cplayer->ValidationStatus_PresetLoaded              = Classes::ESelectionValidationStatus::SVS_Succeeded;
+    //     cplayer->ValidationStatus_MechInstance              = Classes::ESelectionValidationStatus::SVS_Succeeded;
+    //     cplayer->ValidationStatus_SelectedPrimaryWeapon     = Classes::ESelectionValidationStatus::SVS_Succeeded;
+    //     cplayer->ValidationStatus_AchievementsLoaded        = Classes::ESelectionValidationStatus::SVS_Succeeded;
+    //     cplayer->OverallSelectionValidationStatus           = Classes::ESelectionValidationStatus::SVS_Succeeded;
+        
+    //     //Classes::UObject::GetName((UObject *)this);
+    //     //if ( cplayer->IsInCombat(false) ) OutputDebugStringA("NOT IN COMBAT");
+    //     //const Classes::UObject* playerObject = (Classes::UObject *) cplayer;
+    //     //const std::string playername = cplayer->GetName();
+    //     //::OutputDebugStringA(playername.c_str());
+    //     //OutputDebugStringA( )
+    //     //UNREFERENCED_PARAMETER(playername);
+        
+    // }
+
+    
+    
+    ::OutputDebugStringA("UPDATEOVERALL ======================================/////////////////////////");
+
+    Classes::AR_PlayerController* cplayer = reinterpret_cast<Classes::AR_PlayerController*>(PC);
+
+    cplayer->ValidationStatus_ItemInstanceCollection    = Classes::ESelectionValidationStatus::SVS_Succeeded;
+    cplayer->ValidationStatus_PresetLoaded              = Classes::ESelectionValidationStatus::SVS_Succeeded;
+    cplayer->ValidationStatus_MechInstance              = Classes::ESelectionValidationStatus::SVS_Succeeded;
+    cplayer->ValidationStatus_SelectedPrimaryWeapon     = Classes::ESelectionValidationStatus::SVS_Succeeded;
+    cplayer->ValidationStatus_AchievementsLoaded        = Classes::ESelectionValidationStatus::SVS_Succeeded;
+    cplayer->OverallSelectionValidationStatus           = Classes::ESelectionValidationStatus::SVS_Succeeded;
+    cplayer->SelectionValidationResponse                = Classes::ESelectionValidationResponse::SVR_Valid;
+
+    Real_AR_PlayerController_UpdateOverallStatus(PC);
+    //UNREFERENCED_PARAMETER(ARPlayerController);
+
+} 
+// infinity: bypass CheckStartMatch() countdown "player not synced" issue
+BOOL __fastcall Mine_PRI_IsOnlinePlayerAccountSynced()
+{
+
+        // const auto pri = reinterpret_cast<Classes::AR_PlayerReplicationInfo*>(AR_PlayerReplicationInfo);
+    // const Classes::UR_OnlinePlayerStats_UnrankedGameplay stats = pri->OnlinePlayerStats_UnrankedGameplay;
+    // const Classes::TEnumAsByte<Classes::EOnlinePlayerStats_State> ss = stats.StatsState
+    //::OutputDebugStringA("[IsOnlinePlayerAccountSynced] Spoofing to TRUE\n");
+    //::OutputDebugStringA("Trying the funny shit !!!\n");
+
+    //::OutputDebugStringA("[IsOnlinePlayerAccountSynced] Spoofing to TRUE\n");
+    //::OutputDebugStringA("Trying the funny shit !!!\n");
+    // if ( justonce == false) {
+        //Real_AR_Deathmatch_ReadOnlinePlayerAccounts();
+        //justonce = true;
+    //}
+    return TRUE;
+}
+
+VOID __fastcall Mine_AR_Deathmatch_ReadOnlinePlayerAccounts()
+{
+    ::OutputDebugStringA("[AR_Deathmatch_ReadOnlinePlayerAccounts] !!!\n");
+    Real_AR_Deathmatch_ReadOnlinePlayerAccounts();
 }
 
 /**
@@ -279,9 +613,59 @@ BOOL __stdcall Mine_UWorld_Listen(const int32_t world, const int32_t url)
     const auto world_info = reinterpret_cast<Classes::AWorldInfo*>(Real_UWorld_GetWorldInfo(world, 0));
     if (world_info)
     {
-        const auto engine = reinterpret_cast<Classes::UGameEngine*>(*Real_PTR_UGameEngine);
+        //const auto engine = reinterpret_cast<Classes::UGameEngine*>(*Real_PTR_UGameEngine);
 
-        world_info->NetMode             = engine->Client ? Classes::ENetMode::NM_ListenServer : Classes::ENetMode::NM_DedicatedServer;
+        //world_info->NetMode             = engine->Client ? Classes::ENetMode::NM_ListenServer : Classes::ENetMode::NM_DedicatedServer;
+        //world_info->NetMode             = Classes::ENetMode::NM_ListenServer;
+        
+
+        const auto oldNextURL = (world_info->NextURL).c_str();
+
+        ::OutputDebugStringA("========= OLD WORLDINFO ========");
+        ::OutputDebugStringA(reinterpret_cast<LPCSTR>(oldNextURL) );
+        ::OutputDebugStringA("--------------------------------");
+
+        world_info->NetMode             = Classes::ENetMode::NM_DedicatedServer;
+
+        //world_info->NextTravelType = Classes::ETravelType::TRAVEL_Absolute;
+
+        // Infinity: Fix server trying to travel to 0.0.0.0/MapUrl and disconnecting all clients as a result
+        world_info->NextTravelType = Classes::ETravelType::TRAVEL_Absolute;
+        //world_info->bBegunPlay = false;
+
+        // world_info->bOfflineApproved = 1;
+        //world_info->bStartup = 1;
+
+        // game_info->NumBots = 12;
+        // game_info->bAlwaysTick = 1;
+        // game_info->bDebug = 1;
+        // game_info->bDelayedStart = 1;
+        game_info->bUseSeamlessTravel = 0;
+        ::OutputDebugStringA("SET worldinfo");
+
+        const auto game_engine = reinterpret_cast<Classes::UGameEngine*>(Real_PTR_UGameEngine);
+
+
+        game_engine->TravelType = Classes::ETravelType::TRAVEL_Absolute;
+
+        const auto last_url_valid = game_engine->LastURL.Valid;
+        if ( last_url_valid ) {
+            ::OutputDebugStringA("LASTURL WAS VALID: ");
+            //::OutputDebugStringW( last_url );
+        }
+        
+        //const auto svOpts = game_info->GameName.c_str();
+
+        const auto nextLevel = world_info->NextURL.c_str();
+        ::OutputDebugStringA("NEXT LEVEL:");
+        ::OutputDebugStringW(nextLevel);
+        //::OutputDebugStringW(svOpts);
+
+        //const auto* UW = reinterpret_cast<Classes::UWorld*>(cworld);
+       // const auto u = new Classes::FString(L"VS-Andromeda");
+        //UW->ServerTravel( u, false, false);
+        //world_info->ServerTravel( *u, false, false );
+
         world_info->NextSwitchCountdown = *NetDriver_ServerTravelPause;
     }
 
@@ -295,18 +679,33 @@ BOOL __stdcall Mine_UWorld_Listen(const int32_t world, const int32_t url)
  * @param {int32_t} pEdx - The value of the EDX register. (ignored)
  * @param {int32_t} url - The URL associated with this world.
  */
+
+bool justonce = false;
+
+
+bool only_listen_once = false;
+
 void __fastcall Mine_UWorld_SetGameInfo(int32_t world, int32_t pEdx, int32_t url)
 {
     UNREFERENCED_PARAMETER(pEdx);
 
+    ::OutputDebugStringW(L"[SETGAMEINFO]");
+
     // Allow the original call to happen first..
     Real_UWorld_SetGameInfo(world, url);
+
+    //if( only_listen_once == true ) return;
+
+    //only_listen_once = true;
+
+    //if ( justonce == true ) return;
 
     __asm pushad;
     __asm pushfd;
 
     // Reimplement the removed UWorld::Listen call..
     Mine_UWorld_Listen(world, url);
+    //if ( justonce == false ) justonce = true;
 
     __asm popfd;
     __asm popad;
@@ -437,6 +836,69 @@ __declspec(dllexport) BOOL __stdcall install(void)
     Real_UWorld_SetGameInfo             = atomic::memory::find<decltype(Real_UWorld_SetGameInfo)>(base, size, "6AFF68????????64A1000000005081EC64020000A1????????33C48984246002000053555657A1????????33C4508D84247802000064A3000000008BAC248802", 0, 0);
     Real_UWorld_GetWorldInfo            = atomic::memory::find<decltype(Real_UWorld_GetWorldInfo)>(base, size, "568B71508B464085C07F??74??68????????683F02000068????????68????????E8????????83C410837C2408008B463C8B300F??????????83", 0, 0);
 
+
+    //PE-INDEX: Old, stolen from the SDKGen
+    Real_ProcessEvent                   = atomic::memory::find_ptr<decltype(Real_ProcessEvent)>(base, size, "74??83C00783E0F8E8????????8BC4",200,0);
+    PTR_CHECK(Real_ProcessEvent);
+
+    /////////////////////////////////////////////////////////////////////////////
+    // UOnlineSubsystemMeteor
+    ////////////////////////////////////////////////////////////////////////////
+
+    Real_UOnlineSubsystemMeteor_ReadGameItemInstanceCollection = atomic::memory::find<decltype(Real_UOnlineSubsystemMeteor_ReadGameItemInstanceCollection)>(base, size, "6AFF??????????64A1????????505156??????????33C450????????64A3????????8BF16A08687425??????????????83C408????????????????????????85C0??????????????????????8D8E5003????51????????52518BC8",0,0);
+    PTR_CHECK(Real_UOnlineSubsystemMeteor_ReadGameItemInstanceCollection);
+
+    Real_UOnlineSubsystemMeteor_IsServerListingCreated = atomic::memory::find<decltype(Real_UOnlineSubsystemMeteor_IsServerListingCreated)>(base, size, "568BF18B??????????85C9??????????????83F801????B801??????5EC38B8E240100008B018B5020FFD284C0",0,0);
+    PTR_CHECK(Real_UOnlineSubsystemMeteor_IsServerListingCreated)
+
+    //-------------------------------------------------------------------------//
+
+    /////////////////////////////////////////////////////////////////////////////
+    // AR_PlayerController
+    ////////////////////////////////////////////////////////////////////////////
+
+    Real_AR_PlayerController_UpdateMechInstanceExpiredStatus = atomic::memory::find<decltype(Real_AR_PlayerController_UpdateOverallStatus)>(base, size, "6AFF??????????64A1????????5083EC1C53555657??????????33C450????????64A3????????8BF180BE7D0D000001????????????80BE7B0D000003????????????80BE800D000007????????????8B86DC01000050",0,0);
+    PTR_CHECK(Real_AR_PlayerController_UpdateMechInstanceExpiredStatus);
+
+    Real_AR_PlayerController_UpdateOverallStatus = atomic::memory::find<decltype(Real_AR_PlayerController_UpdateOverallStatus)>(base, size, "6AFF68????????64A1????????5083EC18",0,0);
+    PTR_CHECK(Real_AR_PlayerController_UpdateOverallStatus);
+
+    //-------------------------------------------------------------------------//
+
+
+    // PlayerReplicationInfo: IsAccountSynced
+    Real_PRI_IsOnlinePlayerAccountSynced     = atomic::memory::find<decltype(Real_PRI_IsOnlinePlayerAccountSynced)>(base, size, "8B??????????85C074??8A????3C0174??3C0375??8B??????????85C074??B2023850??75??8B81????????85C074??38????75??38????75??B801??????C3", 0, 0);
+    PTR_CHECK(Real_PRI_IsOnlinePlayerAccountSynced);
+
+
+    /////////////////////////////////////////////////////////////////////////////
+    // UR_MechSetup
+    ////////////////////////////////////////////////////////////////////////////
+
+    Real_UR_MechSetup_CreateMechPresetsFromInstances = atomic::memory::find<decltype(Real_UR_MechSetup_CreateMechPresetsFromInstances)>(base, size, "6AFF??????????64A1????????5083EC6053555657A1????????33C450????????64A3????????8BD9??????????????????50??????????33ED83C4043BC5????????????8B80980100008B7848????????3BFD??????????????????????????51??????????83C408??????????",0,0);
+    PTR_CHECK(Real_UR_MechSetup_CreateMechPresetsFromInstances);
+
+    Real_UR_MechSetup_SetupMechPresetFromInstance = atomic::memory::find<decltype(Real_UR_MechSetup_SetupMechPresetFromInstance)>(base, size, "6AFF??????????64A1????????5081ECE001000053555657A1????????33C450??????????????64A3????????8BF9??????????????????50??????????83C404????????85C0??????????????????????????85DB????????????3B9FE001??????????????????????????????85F6????????????8B87E00100003BD8????85DB????85C0????",0,0);
+    PTR_CHECK(Real_UR_MechSetup_SetupMechPresetFromInstance);
+
+    Real_UR_MechSetup_CheckMechPresetIntegrity = atomic::memory::find<decltype(Real_UR_MechSetup_CheckMechPresetIntegrity)>(base, size, "6AFF??????????64A1????????5083EC4853555657A1????????33C450????????64A3????????8BF1??????????50??????????83C404????????85C0????????????8B??????85DB????????????3B9EE001??????????????????????????????????????8B86E00100003BD8????85DB????85C0????",0,0);
+    PTR_CHECK(Real_UR_MechSetup_CheckMechPresetIntegrity);
+
+    Real_UR_MechSetup_IsPresetIndexValid = atomic::memory::find<decltype(Real_UR_MechSetup_IsPresetIndexValid)>(base, size, "8B??????85C0????3B81E001????????B801??????C204??33C0C204??",0,0);
+    PTR_CHECK(Real_UR_MechSetup_IsPresetIndexValid);
+
+    //-------------------------------------------------------------------------//
+
+
+    Real_FURL_Base_URL_Traveltype_Constructor = atomic::memory::find<decltype(Real_FURL_Base_URL_Traveltype_Constructor)>(base, size, "558BEC6AFF??????????64A1????????5083EC74A1????????33C5??????53565750??????64A3????????8BD9??????A1??????????????????????????????????89430489430885C0????6A0803C0506A00??????????83C40C8903",0,0);
+    PTR_CHECK(Real_FURL_Base_URL_Traveltype_Constructor);
+
+    Real_UGameEngine_Browse = atomic::memory::find<decltype(Real_UGameEngine_Browse)>(base, size, "6AFF??????????64A1????????5083EC7853555657A1????????33C450??????????????64A3????????8BF9??????????????33DB",0,0);
+    PTR_CHECK(Real_UGameEngine_Browse)
+
+    Real_AR_Deathmatch_ReadOnlinePlayerAccounts = atomic::memory::find<decltype(Real_AR_Deathmatch_ReadOnlinePlayerAccounts)>(base, size, "558BE9F6????????????0F??????????8B??????????5356576A00E8????????8BD88B??????????33FF39??????????0F??????????8B??????????8D??????85FF78??8B??????????3BF87C??85FF75??85C074??68????????683F02000068????????68????????E8????????8B??????????83C4108B??????????8B????85F674??85C975??68????????E8????????83C404A3????????E8????????8B??????????85C974??8B????85C074??3BC174??8B????85C075??EB??8B????8B??????????568BCDFFD08B??????????8B??????????473B??????????0F??????????5F5E5B5DC3", 0, 0);
+    PTR_CHECK(Real_AR_Deathmatch_ReadOnlinePlayerAccounts);
+
     PTR_CHECK(Real_ParseParam);
     PTR_CHECK(Real_TArray_USeqAct_Latent_AddItem);
     PTR_CHECK(Real_UGameEngine_ConstructNetDriver);
@@ -447,6 +909,7 @@ __declspec(dllexport) BOOL __stdcall install(void)
     PTR_CHECK(Real_UWorld_GetGameInfo);
     PTR_CHECK(Real_UWorld_SetGameInfo);
     PTR_CHECK(Real_UWorld_GetWorldInfo);
+    PTR_CHECK(Real_AR_PlayerController_UpdateOverallStatus);
 
     // Update object pointers..
     Real_PTR_GCmdLine                   = atomic::memory::find_ptr<decltype(Real_PTR_GCmdLine)>(base, size, "68????????895C2428E8????????83C41485C0", 1, 0);
@@ -491,6 +954,27 @@ __declspec(dllexport) BOOL __stdcall install(void)
     ::DetourTransactionBegin();
     ::DetourUpdateThread(::GetCurrentThread());
     ::DetourAttach(&(PVOID&)Real_UWorld_SetGameInfo, Mine_UWorld_SetGameInfo);
+
+    // infinity: bypass CheckStartMatch() countdown "player not synced" issue
+    //::DetourAttach(&(PVOID&)Real_PRI_IsOnlinePlayerAccountSynced, Mine_PRI_IsOnlinePlayerAccountSynced);
+
+    //HOOK_BROWSE
+    ::DetourAttach(&(PVOID&)Real_UGameEngine_Browse, Mine_UGameEngine_Browse);
+
+    ::DetourAttach(&(PVOID&)Real_UOnlineSubsystemMeteor_IsServerListingCreated, Mine_UOnlineSubsystemMeteor_IsServerListingCreated);
+    ::DetourAttach(&(PVOID&)Real_UOnlineSubsystemMeteor_ReadGameItemInstanceCollection, Mine_UOnlineSubsystemMeteor_ReadGameItemInstanceCollection);
+    
+    ::DetourAttach(&(PVOID&)Real_UR_MechSetup_CheckMechPresetIntegrity, Mine_UR_MechSetup_CheckMechPresetIntegrity);
+    ::DetourAttach(&(PVOID&)Real_UR_MechSetup_IsPresetIndexValid, Mine_UR_MechSetup_IsPresetIndexValid);
+    ::DetourAttach(&(PVOID&)Real_UR_MechSetup_CreateMechPresetsFromInstances, Mine_UR_MechSetup_CreateMechPresetsFromInstances);
+    ::DetourAttach(&(PVOID&)Real_UR_MechSetup_SetupMechPresetFromInstance, Mine_UR_MechSetup_SetupMechPresetFromInstance);
+    //::DetourAttach(&(PVOID&)Real_FURL_Base_URL_Traveltype_Constructor, Mine_FURL_Base_URL_Traveltype_Constructor);
+
+    //::DetourAttach(&(PVOID&)Real_AR_PlayerController_UpdateOverallStatus, Mine_AR_PlayerController_UpdateOverallStatus); 
+
+    ::DetourAttach(&(PVOID&)Real_AR_PlayerController_UpdateMechInstanceExpiredStatus, Mine_AR_PlayerController_UpdateMechInstanceExpiredStatus); 
+
+    //::DetourAttach(&(PVOID&)Real_AR_Deathmatch_ReadOnlinePlayerAccounts, Mine_AR_Deathmatch_ReadOnlinePlayerAccounts);
 
 #if defined(DEBUG_MODE) && (DEBUG_MODE == 1)
     ::DetourAttach(&(PVOID&)Real_ULinkerLoad_PreLoad, Mine_ULinkerLoad_PreLoad);
